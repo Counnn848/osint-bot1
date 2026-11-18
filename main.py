@@ -1,3 +1,4 @@
+import asyncio, aiohttp, re
 import os
 from aiohttp import web
 from aiogram import Bot, Dispatcher
@@ -16,6 +17,34 @@ dp = Dispatcher()
 async def start(m: Message):
     await m.answer("Привет! Я OSINT-бот.")
 
+SITES = {
+    "GitHub": "https://github.com/{}",
+    "Pinterest": "https://www.pinterest.com/{}/",
+    "SoundCloud": "https://soundcloud.com/{}",
+    "Behance": "https://www.behance.net/{}",
+    "Dribbble": "https://dribbble.com/{}",
+    "Dev.to": "https://dev.to/{}",
+}
+
+@dp.message(Command("nick"))
+async def nick(m: Message):
+    parts = (m.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not re.fullmatch(r"[\w.\-]{1,32}", parts[1].strip()):
+        await m.answer("Напиши так: /nick username")
+        return
+    name = parts[1].strip()
+    headers = {"User-Agent": "Mozilla/5.0"}
+    async with aiohttp.ClientSession(headers=headers) as s:
+        async def check(site, tpl):
+            url = tpl.format(name)
+            try:
+                async with s.get(url, timeout=aiohttp.ClientTimeout(total=10)) as r:
+                    return site, url, r.status == 200
+            except Exception:
+                return site, url, False
+        results = await asyncio.gather(*(check(k, v) for k, v in SITES.items()))
+    found = [f"✅ {site}: {url}" for site, url, ok in results if ok]
+    await m.answer("\n".join(found) if found else "Ничего не найдено")
 async def on_startup(bot: Bot):
     await bot.set_webhook(BASE_URL + PATH)
 
