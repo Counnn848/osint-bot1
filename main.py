@@ -1,3 +1,5 @@
+import phonenumbers
+from phonenumbers import geocoder, carrier, timezone
 import asyncio, aiohttp, re
 import os
 from aiohttp import web
@@ -45,6 +47,26 @@ async def nick(m: Message):
         results = await asyncio.gather(*(check(k, v) for k, v in SITES.items()))
     found = [f"✅ {site}: {url}" for site, url, ok in results if ok]
     await m.answer("\n".join(found) if found else "Ничего не найдено")
+@dp.message(Command("phone"))
+async def phone(m: Message):
+    parts = (m.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await m.answer("Напиши так: /phone +79991234567")
+        return
+    try:
+        num = phonenumbers.parse(parts[1].strip(), None)
+    except Exception:
+        await m.answer("Не понял номер. Пиши в международном формате: +79991234567")
+        return
+    if not phonenumbers.is_valid_number(num):
+        await m.answer("Такого номера не существует")
+        return
+    country = geocoder.description_for_number(num, "ru") or "неизвестно"
+    oper = carrier.name_for_number(num, "ru") or "неизвестно"
+    tz = ", ".join(timezone.time_zones_for_number(num))
+    fmt = phonenumbers.format_number(num, phonenumbers.PhoneNumberFormat.INTERNATIONAL)
+    await m.answer(f"📱 {fmt}\n🌍 Регион: {country}\n📡 Оператор: {oper}\n🕒 Часовой пояс: {tz}")
+
 async def on_startup(bot: Bot):
     await bot.set_webhook(BASE_URL + PATH)
 
