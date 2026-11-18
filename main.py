@@ -315,7 +315,138 @@ async def profile_btn(c: CallbackQuery):
 async def help_btn(c: CallbackQuery):
     await c.message.answer(HELP_TEXT)
     await c.answer()
+# ---------- меню: новые пункты ----------
+TOOLS["archive"] = ("🕰 Архив", "/archive github.com")
+HELP_TEXT += "\n/archive домен — старые версии сайта\n📷 EXIF — отправь фото как файл"
 
+def menu_kb():
+    b = lambda k: InlineKeyboardButton(text=TOOLS[k][0], callback_data="t:" + k)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [b("nick"), b("phone")],
+        [b("ip"), b("domain")],
+        [b("sub"), b("archive")],
+        [InlineKeyboardButton(text="📷 EXIF", callback_data="exif_hint")],
+        [InlineKeyboardButton(text="👤 Профиль", callback_data="profile"),
+         InlineKeyboardButton(text="❔ Помощь", callback_data="help")],
+    ])
+
+@dp.callback_query(F.data == "exif_hint")
+async def exif_hint(c: CallbackQuery):
+    await c.message.answer("📷 Отправь фото КАК ФАЙЛ: скрепка → Файл (не «Галерея»). "
+                           "Иначе Telegram сотрёт метаданные.")
+    await c.answer()
+
+async def set_cmds2(bot: Bot):
+    await bot.set_my_commands([
+        BotCommand(command="menu", description="Главное меню"),
+        BotCommand(command="help", description="Список команд"),
+        BotCommand(command="profile", description="Мой профиль"),
+        BotCommand(command="nick", description="Поиск ника"),
+        BotCommand(command="phone", description="Данные по номеру"),
+        BotCommand(command="ip", description="Данные по IP"),
+        BotCommand(command="domain", description="Данные по домену"),
+        BotCommand(command="sub", description="Поддомены"),
+        BotCommand(command="archive", description="Старые версии сайта"),
+    ])
+
+dp.startup.register(set_cmds2)
+
+# ---------- EXIF ----------
+def _dms(v, ref):
+    d = float(v[0]) + float(v[1]) / 60 + float(v[2]) / 3600
+    return -d if ref in ("S", "W") else d
+
+def read_exif(data: bytes):
+    im = Image.open(io.BytesIO(data))
+    ex = im.getexif()
+    tags = {}
+    for src in (ex, ex.get_ifd(0x8769)):
+        for k, v in src.items():
+            tags[ExifTags.TAGS.get(k, str(k))] = v
+    gps = ex.get_ifd(0x8825)
+    pos = None
+    if gps.get(2) and gps.get(4):
+        pos = (_dms(gps[2], gps.get(1, "N")), _dms(gps[4], gps.get(3, "E")))
+    return im, tags, pos
+
+@dp.message(F.photo)
+async def photo_warn(m: Message):
+    await m.answer("Telegram стирает метаданные из обычных фото 😕\n"
+                   "Отправь снимок как ФАЙЛ: скрепка → Файл.")
+
+@dp.message(F.document)
+async def exif_doc(m: Message):
+    d = m.document
+    if (d.file_size or 0) > 20 * 1024 * 1024:
+        await m.answer("Файл больше 20 МБ, бот такой не скачает")
+        return
+    if not (d.mime_type or "").startswith("image/"):
+        await m.answer("Нужна картинка (лучше JPEG), отправленная как файл")
+        return
+    touch(m.from_user, "exif")
+    try:
+        buf = await bot.download(d)
+        im, tags, pos = read_exif(buf.read())
+    except Exception:
+        await m.answer("Не смог прочитать файл. Подойдёт JPEG (HEIC пока не поддерживается)")
+        return
+    want = [("Make", "Производитель"), ("Model", "Модель"), ("LensModel", "Объектив"),
+            ("Software", "Программа"), ("DateTimeOriginal", "Снято"),
+            ("DateTime", "Изменено"), ("ExposureTime", "Выдержка"),
+            ("FNumber", "Диафрагма"), ("ISOSpeedRatings", "ISO")]
+    lines = [f"🖼 {im.format}, {im.size[0]}x{im.size[1]}"]
+    for key, label in want:
+        v = tags.get(key)
+        if v not in (None, ""):
+            lines.append(f"{label}: {str(v)[:80]}")
+    if pos:
+        lines.append(f"📍 GPS: {pos[0]:.5f}, {pos[1]:.5f}\n"
+                     f"https://maps.google.com/?q={pos[0]:.6f},{pos[1]:.6f}")
+    if len(lines) == 1:
+        lines.append("Метаданных нет: их стёрли или фото из мессенджера/соцсети")
+    await m.answer("\n".join(lines))
+
+# ---------- Web Archive ----------
+@dp.message(Command("archive"))
+async def archive(m: Message):
+    parts = (m.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await m.answer("Напиши так: /archive example.com")
+        return
+    name = parts[1].strip().lower()
+    name = name.replace("https://", "").replace("http://", "").split("/")[0]
+    if not re.fullmatch(r"([a-z0-9-]+\.)+[a-z]{2,}", name):
+        await m.answer("Не похоже на домен. Пример: example.com")
+        return
+    await m.answer("Ищу в Web Archive, до 30 секунд...")
+
+    async def cdx(s, limit):
+        async with s.get("https://web.archive.org/cdx/search/cdx",
+                         params={"url": name, "output": "json", "fl": "timestamp",
+                                 "limit": limit, "filter": "statuscode:200"},
+                         timeout=aiohttp.ClientTimeout(total=30)) as r:
+            text = await r.text()
+        if not text.strip():
+            return None
+        rows = json.loads(text)
+        return rows[1][0] if len(rows) > 1 else None
+
+    try:
+        async with aiohttp.ClientSession() as s:
+            first, last = await asyncio.gather(cdx(s, 1), cdx(s, -1))
+    except Exception:
+        await m.answer("Web Archive не ответил, попробуй позже")
+        return
+    if not first:
+        await m.answer("Снимков этого сайта нет")
+        return
+    fmt = lambda ts: f"{ts[6:8]}.{ts[4:6]}.{ts[:4]}"
+    await m.answer(
+        f"🕰 {name}\n\n"
+        f"📌 Первый снимок: {fmt(first)}\nhttps://web.archive.org/web/{first}/{name}\n\n"
+        f"🆕 Последний: {fmt(last or first)}\nhttps://web.archive.org/web/{last or first}/{name}\n\n"
+        f"📚 Все снимки:\nhttps://web.archive.org/web/*/{name}"
+  )
 async def set_cmds(bot: Bot):
     await bot.set_my_commands([
         BotCommand(command="menu", description="Главное меню"),
