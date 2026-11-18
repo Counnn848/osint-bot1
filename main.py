@@ -1,3 +1,4 @@
+import ipaddress
 import phonenumbers
 from phonenumbers import geocoder, carrier, timezone
 import asyncio, aiohttp, re
@@ -67,6 +68,45 @@ async def phone(m: Message):
     fmt = phonenumbers.format_number(num, phonenumbers.PhoneNumberFormat.INTERNATIONAL)
     await m.answer(f"📱 {fmt}\n🌍 Регион: {country}\n📡 Оператор: {oper}\n🕒 Часовой пояс: {tz}")
 
+@dp.message(Command("ip"))
+async def ip_info(m: Message):
+    parts = (m.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await m.answer("Напиши так: /ip 8.8.8.8")
+        return
+    try:
+        ip = ipaddress.ip_address(parts[1].strip())
+    except ValueError:
+        await m.answer("Это не похоже на IP-адрес")
+        return
+    if not ip.is_global:
+        await m.answer("Это локальный адрес, по нему данных нет")
+        return
+    url = f"http://ip-api.com/json/{ip}?lang=ru&fields=status,country,regionName,city,timezone,isp,org,as,proxy,hosting"
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(url, timeout=aiohttp.ClientTimeout(total=10)) as r:
+                d = await r.json()
+    except Exception:
+        await m.answer("Сервис не ответил, попробуй позже")
+        return
+    if d.get("status") != "success":
+        await m.answer("Данных по этому IP нет")
+        return
+    flags = []
+    if d.get("proxy"):
+        flags.append("прокси/VPN")
+    if d.get("hosting"):
+        flags.append("хостинг/дата-центр")
+    await m.answer(
+        f"🌐 {ip}\n"
+        f"🌍 {d.get('country')}, {d.get('regionName')}, {d.get('city')}\n"
+        f"📡 Провайдер: {d.get('isp')}\n"
+        f"🏢 Организация: {d.get('org') or '-'}\n"
+        f"🔢 AS: {d.get('as')}\n"
+        f"🕒 Часовой пояс: {d.get('timezone')}\n"
+        f"⚠️ Метки: {', '.join(flags) if flags else 'нет'}"
+    )
 async def on_startup(bot: Bot):
     await bot.set_webhook(BASE_URL + PATH)
 
