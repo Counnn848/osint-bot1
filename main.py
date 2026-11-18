@@ -23,11 +23,25 @@ dp = Dispatcher()
 
 SITES = {
     "GitHub": "https://github.com/{}",
-    "Pinterest": "https://www.pinterest.com/{}/",
+    "GitLab": "https://gitlab.com/{}",
+    "Dev.to": "https://dev.to/{}",
+    "Medium": "https://medium.com/@{}",
+    "Keybase": "https://keybase.io/{}",
+    "Replit": "https://replit.com/@{}",
+    "Codeforces": "https://codeforces.com/profile/{}",
+    "Chess.com": "https://www.chess.com/member/{}",
+    "Lichess": "https://lichess.org/@/{}",
+    "Last.fm": "https://www.last.fm/user/{}",
     "SoundCloud": "https://soundcloud.com/{}",
+    "YouTube": "https://www.youtube.com/@{}",
+    "Vimeo": "https://vimeo.com/{}",
+    "Pinterest": "https://www.pinterest.com/{}/",
     "Behance": "https://www.behance.net/{}",
     "Dribbble": "https://dribbble.com/{}",
-    "Dev.to": "https://dev.to/{}",
+    "About.me": "https://about.me/{}",
+    "Linktree": "https://linktr.ee/{}",
+    "Gravatar": "https://gravatar.com/{}",
+    "Pastebin": "https://pastebin.com/u/{}",
 }
 
 @dp.message(Command("nick"))
@@ -35,7 +49,7 @@ async def nick(m: Message):
     parts = (m.text or "").split(maxsplit=1)
     if len(parts) < 2 or not re.fullmatch(r"[\w.\-]{1,32}", parts[1].strip()):
         await m.answer("Напиши так: /nick username")
-        return
+        return 
     name = parts[1].strip()
     headers = {"User-Agent": "Mozilla/5.0"}
     async with aiohttp.ClientSession(headers=headers) as s:
