@@ -21,10 +21,6 @@ PATH = "/webhook"
 bot = Bot(TOKEN)
 dp = Dispatcher()
 
-@dp.message(Command("start"))
-async def start(m: Message):
-    await m.answer("Привет! Я OSINT-бот.")
-
 SITES = {
     "GitHub": "https://github.com/{}",
     "Pinterest": "https://www.pinterest.com/{}/",
@@ -195,6 +191,130 @@ async def sub(m: Message):
     if len(lst) > len(shown):
         text += f"\n\n...и ещё {len(lst) - len(shown)}"
     await m.answer(text[:4000])
+BASE = os.path.dirname(os.path.abspath(__file__))
+DATA = os.path.join(BASE, "data.json")
+
+TOOLS = {
+    "nick": ("🔎 Ник", "/nick torvalds"),
+    "phone": ("📱 Телефон", "/phone +79161234567"),
+    "ip": ("🌐 IP", "/ip 8.8.8.8"),
+    "domain": ("🧭 Домен", "/domain github.com"),
+    "sub": ("🌿 Поддомены", "/sub github.com"),
+}
+
+HELP_TEXT = (
+    "Команды:\n\n"
+    "/nick ник — поиск ника на сайтах\n"
+    "/phone номер — оператор и регион\n"
+    "/ip адрес — страна, город, провайдер\n"
+    "/domain домен — DNS и даты регистрации\n"
+    "/sub домен — поддомены\n"
+    "/profile — твой профиль\n"
+    "/menu — главное меню"
+)
+
+def load():
+    try:
+        with open(DATA, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save(d):
+    try:
+        with open(DATA, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+USERS = load()
+
+def touch(user, cmd=None):
+    uid = str(user.id)
+    u = USERS.setdefault(uid, {"since": datetime.now().strftime("%d.%m.%Y"),
+                               "total": 0, "cmds": {}})
+    if cmd:
+        u["total"] += 1
+        u["cmds"][cmd] = u["cmds"].get(cmd, 0) + 1
+    save(USERS)
+    return u
+
+class Stats(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        try:
+            if event.from_user and event.text and event.text.startswith("/"):
+                cmd = event.text.split()[0][1:].split("@")[0].lower()
+                if cmd in TOOLS:
+                    touch(event.from_user, cmd)
+                elif cmd in ("start", "menu", "help", "profile"):
+                    touch(event.from_user)
+        except Exception:
+            pass
+        return await handler(event, data)
+
+dp.message.outer_middleware(Stats())
+
+def menu_kb():
+    b = lambda k: InlineKeyboardButton(text=TOOLS[k][0], callback_data="t:" + k)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [b("nick"), b("phone")],
+        [b("ip"), b("domain")],
+        [b("sub")],
+        [InlineKeyboardButton(text="👤 Профиль", callback_data="profile"),
+         InlineKeyboardButton(text="❔ Помощь", callback_data="help")],
+    ])
+
+@dp.message(Command("start", "menu"))
+async def start(m: Message):
+    await m.answer_photo(FSInputFile(os.path.join(BASE, "menu.png")),
+                         caption="Выбери инструмент 👇", reply_markup=menu_kb())
+
+@dp.message(Command("help"))
+async def help_cmd(m: Message):
+    await m.answer(HELP_TEXT, reply_markup=menu_kb())
+
+async def send_profile(msg: Message, user):
+    u = touch(user)
+    top = sorted(u["cmds"].items(), key=lambda x: -x[1])
+    lines = "\n".join(f"  {c}: {n}" for c, n in top) or "  пока пусто"
+    text = (f"👤 {user.full_name}\n🆔 {user.id}\n📅 С нами с: {u['since']}\n"
+            f"📊 Запросов: {u['total']}\n\nПо командам:\n{lines}")
+    await msg.answer_photo(FSInputFile(os.path.join(BASE, "profile.png")),
+                           caption=text[:1000])
+
+@dp.message(Command("profile"))
+async def profile_cmd(m: Message):
+    await send_profile(m, m.from_user)
+
+@dp.callback_query(F.data.startswith("t:"))
+async def tool_btn(c: CallbackQuery):
+    title, example = TOOLS[c.data[2:]]
+    await c.message.answer(f"{title}\nОтправь команду в таком виде:\n{example}")
+    await c.answer()
+
+@dp.callback_query(F.data == "profile")
+async def profile_btn(c: CallbackQuery):
+    await send_profile(c.message, c.from_user)
+    await c.answer()
+
+@dp.callback_query(F.data == "help")
+async def help_btn(c: CallbackQuery):
+    await c.message.answer(HELP_TEXT)
+    await c.answer()
+
+async def set_cmds(bot: Bot):
+    await bot.set_my_commands([
+        BotCommand(command="menu", description="Главное меню"),
+        BotCommand(command="help", description="Список команд"),
+        BotCommand(command="profile", description="Мой профиль"),
+        BotCommand(command="nick", description="Поиск ника"),
+        BotCommand(command="phone", description="Данные по номеру"),
+        BotCommand(command="ip", description="Данные по IP"),
+        BotCommand(command="domain", description="Данные по домену"),
+        BotCommand(command="sub", description="Поддомены"),
+    ])
+
+dp.startup.register(set_cmds)
 async def on_startup(bot: Bot):
     await bot.set_webhook(BASE_URL + PATH)
 
