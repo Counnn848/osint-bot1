@@ -150,6 +150,46 @@ async def domain(m: Message):
     if txt:
         lines.append("📝 TXT: " + " | ".join(t[:80] for t in txt[:3]))
     await m.answer("\n".join(lines))
+@dp.message(Command("sub"))
+async def sub(m: Message):
+    parts = (m.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await m.answer("Напиши так: /sub example.com")
+        return
+    name = parts[1].strip().lower()
+    name = name.replace("https://", "").replace("http://", "").split("/")[0]
+    if not re.fullmatch(r"([a-z0-9-]+\.)+[a-z]{2,}", name):
+        await m.answer("Не похоже на домен. Пример: example.com")
+        return
+    await m.answer("Ищу, это может занять до 30 секунд...")
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get("https://crt.sh/",
+                             params={"q": f"%.{name}", "output": "json"},
+                             timeout=aiohttp.ClientTimeout(total=40)) as r:
+                if r.status != 200:
+                    await m.answer("crt.sh сейчас не отвечает, попробуй позже")
+                    return
+                data = await r.json(content_type=None)
+    except Exception:
+        await m.answer("crt.sh не ответил, попробуй позже")
+        return
+    subs = set()
+    for row in data:
+        for n in row.get("name_value", "").split("\n"):
+            n = n.strip().lower().lstrip("*.")
+            if n.endswith(name):
+                subs.add(n)
+    subs.discard(name)
+    if not subs:
+        await m.answer("Поддоменов не найдено")
+        return
+    lst = sorted(subs)
+    shown = lst[:80]
+    text = f"🔎 {name}: найдено {len(lst)}\n\n" + "\n".join(shown)
+    if len(lst) > len(shown):
+        text += f"\n\n...и ещё {len(lst) - len(shown)}"
+    await m.answer(text[:4000])
 async def on_startup(bot: Bot):
     await bot.set_webhook(BASE_URL + PATH)
 
