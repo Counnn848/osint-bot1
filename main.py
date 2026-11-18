@@ -107,6 +107,49 @@ async def ip_info(m: Message):
         f"🕒 Часовой пояс: {d.get('timezone')}\n"
         f"⚠️ Метки: {', '.join(flags) if flags else 'нет'}"
     )
+@dp.message(Command("domain"))
+async def domain(m: Message):
+    parts = (m.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await m.answer("Напиши так: /domain example.com")
+        return
+    name = parts[1].strip().lower()
+    name = name.replace("https://", "").replace("http://", "").split("/")[0]
+    if not re.fullmatch(r"([a-z0-9-]+\.)+[a-z]{2,}", name):
+        await m.answer("Не похоже на домен. Пример: example.com")
+        return
+    tm = aiohttp.ClientTimeout(total=10)
+    async with aiohttp.ClientSession() as s:
+        async def dns(t):
+            try:
+                async with s.get("https://dns.google/resolve",
+                                 params={"name": name, "type": t}, timeout=tm) as r:
+                    d = await r.json(content_type=None)
+                return [a["data"] for a in d.get("Answer", [])]
+            except Exception:
+                return []
+        async def rdap():
+            try:
+                async with s.get(f"https://rdap.org/domain/{name}", timeout=tm) as r:
+                    if r.status != 200:
+                        return {}
+                    return await r.json(content_type=None)
+            except Exception:
+                return {}
+        a, mx, ns, txt, info = await asyncio.gather(
+            dns("A"), dns("MX"), dns("NS"), dns("TXT"), rdap()
+        )
+    ev = {e.get("eventAction"): (e.get("eventDate") or "")[:10] for e in info.get("events", [])}
+    lines = [f"🌐 {name}"]
+    lines.append(f"📅 Создан: {ev.get('registration', '-')}")
+    lines.append(f"⏳ Истекает: {ev.get('expiration', '-')}")
+    lines.append(f"🔄 Изменён: {ev.get('last changed', '-')}")
+    lines.append(f"📍 A: {', '.join(a) if a else '-'}")
+    lines.append(f"📬 MX: {', '.join(mx) if mx else '-'}")
+    lines.append(f"🧭 NS: {', '.join(ns) if ns else '-'}")
+    if txt:
+        lines.append("📝 TXT: " + " | ".join(t[:80] for t in txt[:3]))
+    await m.answer("\n".join(lines))
 async def on_startup(bot: Bot):
     await bot.set_webhook(BASE_URL + PATH)
 
